@@ -4885,6 +4885,10 @@
               }
               uploadId = initData.uploadId;
               item.uploadId = uploadId;
+              // 排障用：确认服务端是否走了 R2 原生分片（走不到就会退化成内存拼接并可能 OOM）
+              console.info(
+                `[chunked-upload] multipart=${Boolean(initData.multipart)} backend=${initData.chunkBackend} chunkSize=${initData.chunkSize}`,
+              );
             }
 
             // 3. 逐片上传，跳过已完成的片

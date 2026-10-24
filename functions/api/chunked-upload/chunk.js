@@ -86,20 +86,25 @@ export async function onRequestPost(context) {
     }
 
     let uploadedChunks = taskData.uploadedChunks || [];
+
     if (!minimizeKvWrites) {
       uploadedChunks = Array.from(new Set([...uploadedChunks, chunkIndex])).sort((a, b) => a - b);
       taskData.uploadedChunks = uploadedChunks;
       taskData.chunkBackend = chunkBackend;
+    }
 
-      if (multipartPart && taskData.r2Multipart) {
-        const parts = (taskData.r2Multipart.parts || []).filter(
-          (item) => item.partNumber !== multipartPart.partNumber,
-        );
-        parts.push({ partNumber: multipartPart.partNumber, etag: multipartPart.etag });
-        parts.sort((a, b) => a.partNumber - b.partNumber);
-        taskData.r2Multipart.parts = parts;
-      }
+    if (multipartPart && taskData.r2Multipart) {
+      const parts = (taskData.r2Multipart.parts || []).filter(
+        (item) => item.partNumber !== multipartPart.partNumber,
+      );
+      parts.push({ partNumber: multipartPart.partNumber, etag: multipartPart.etag });
+      parts.sort((a, b) => a.partNumber - b.partNumber);
+      taskData.r2Multipart.parts = parts;
+    }
 
+    // multipart 的 parts 必须落盘，否则 complete 阶段无法拼接；
+    // 这属于正确性要求，不受 MINIMIZE_KV_WRITES 影响。
+    if (!minimizeKvWrites || multipartPart) {
       await env.img_url.put(`upload:${uploadId}`, JSON.stringify(taskData), {
         expirationTtl: 3600,
       });

@@ -5,8 +5,17 @@
 import { checkAuthentication, isAuthRequired } from '../../utils/auth.js';
 
 const CHUNK_SIZE = 5 * 1024 * 1024;
-const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024;
 const TELEGRAM_WEB_UPLOAD_LIMIT = 20 * 1024 * 1024;
+
+// Pages 版本原先硬编码 100MB，README 里写的 UPLOAD_MAX_SIZE 只对 Docker 版生效。
+// 改用 R2 原生分片后，整体大小不再受单次请求体 100MB 限制（每片仍远小于该限制），
+// 因此这里支持通过环境变量调整。
+function resolveMaxFileSize(env) {
+  const configured = parseInt(env?.UPLOAD_MAX_SIZE, 10);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  return DEFAULT_MAX_FILE_SIZE;
+}
 
 export async function onRequestPost(context) {
   const { request, env } = context;
@@ -40,7 +49,7 @@ export async function onRequestPost(context) {
     const validModes = ['telegram', 'r2', 's3', 'discord', 'huggingface', 'webdav', 'github'];
     const normalizedStorage = validModes.includes(storageMode) ? storageMode : 'telegram';
 
-    const validation = validateChunkUpload(normalizedStorage, normalizedFileSize);
+    const validation = validateChunkUpload(normalizedStorage, normalizedFileSize, resolveMaxFileSize(env));
     if (!validation.ok) {
       return jsonResponse({ error: validation.message, code: validation.code }, validation.status);
     }
@@ -57,7 +66,6 @@ export async function onRequestPost(context) {
     if (
       normalizedStorage === 'r2' &&
       env.R2_BUCKET &&
-      env.MINIMIZE_KV_WRITES !== 'true' &&
       CHUNK_SIZE >= 5 * 1024 * 1024
     ) {
       try {
@@ -102,6 +110,8 @@ export async function onRequestPost(context) {
       uploadId,
       chunkSize: CHUNK_SIZE,
       chunkBackend,
+      // 便于前端与排障确认这次是否走了 R2 原生分片
+      multipart: Boolean(r2Multipart),
     });
   } catch (error) {
     console.error('Init upload error:', error);
@@ -160,13 +170,13 @@ function generateUploadId() {
   return Array.from(array, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function validateChunkUpload(storageMode, fileSize) {
-  if (fileSize > MAX_FILE_SIZE) {
+function validateChunkUpload(storageMode, fileSize, maxFileSize = DEFAULT_MAX_FILE_SIZE) {
+  if (fileSize > maxFileSize) {
     return {
       ok: false,
       status: 413,
       code: 'FILE_TOO_LARGE',
-      message: `文件大小超过限制 (最大 ${MAX_FILE_SIZE / 1024 / 1024}MB)`,
+      message: `文件大小超过限制 (最大 ${Math.floor(maxFileSize / 1024 / 1024)}MB)`,
     };
   }
 
