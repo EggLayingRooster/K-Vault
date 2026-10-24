@@ -88,9 +88,22 @@ class AuthService {
     return cookies[this.config.sessionCookieName] || cookies[LEGACY_COOKIE_NAME] || null;
   }
 
-  createSessionCookie(token) {
+  // 仅在请求确实走 HTTPS 时加 Secure，避免局域网 HTTP 部署无法登录
+  isSecureRequest(request) {
+    if (!request) return false;
+    try {
+      const proto = request.headers.get('x-forwarded-proto');
+      if (proto) return proto.split(',')[0].trim().toLowerCase() === 'https';
+      return new URL(request.url).protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  createSessionCookie(token, request) {
     const maxAge = Math.floor(this.config.sessionDurationMs / 1000);
-    return `${this.config.sessionCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`;
+    const secure = this.isSecureRequest(request) ? '; Secure' : '';
+    return `${this.config.sessionCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=${maxAge}`;
   }
 
   createClearSessionCookies() {

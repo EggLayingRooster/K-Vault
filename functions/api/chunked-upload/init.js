@@ -3,7 +3,6 @@
  * POST /api/chunked-upload/init
  */
 import { checkAuthentication, isAuthRequired } from '../../utils/auth.js';
-import { checkGuestUpload } from '../../utils/guest.js';
 
 const CHUNK_SIZE = 5 * 1024 * 1024;
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
@@ -22,10 +21,10 @@ export async function onRequestPost(context) {
       : true;
 
     if (!isAdmin) {
-      const guestCheck = await checkGuestUpload(request, env, 0);
-      if (!guestCheck.allowed) {
-        return jsonResponse({ error: '访客不支持分片上传，请使用普通上传' }, 403);
-      }
+      // 访客不支持分片上传：无条件拒绝。
+      // 原实现调用 checkGuestUpload(request, env, 0)，传入 size=0 使 GUEST_MAX_FILE_SIZE 校验失效，
+      // 且 allowed 为 true 时访客仍会继续走分片流程，导致大小限制与每日次数限制双双被绕过。
+      return jsonResponse({ error: '访客不支持分片上传，请使用普通上传' }, 403);
     }
 
     const body = await request.json();

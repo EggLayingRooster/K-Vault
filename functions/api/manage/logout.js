@@ -3,7 +3,7 @@ export async function onRequest(context) {
     return new Response('Logged out.', { 
       status: 401,
       headers: {
-        'Set-Cookie': 'auth=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Strict',
+        'Set-Cookie': 'auth=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Strict; Secure',
         'WWW-Authenticate': 'Basic realm="K-Vault Admin"'
       }
     });

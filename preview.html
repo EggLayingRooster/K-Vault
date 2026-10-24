@@ -1313,7 +1313,22 @@
         ...DATA_ASSET_EXTS, ...EDA_EXTS, "m3u8", "midi", "mid", "heic", "heif", "jxl"
       ]);
       const FILE_VIEWER_CDN = "https://cdn.jsdmirror.com/npm/@file-viewer/web-full@latest/dist/flyfish-file-viewer-web-full.iife.js";
+      // ?engineCdn= 只允许这些主机。放开任意主机等于允许第三方脚本在本站域名下执行。
+      // 如需自建镜像，把镜像域名加进这个数组（必须 https）。
+      const ALLOWED_ENGINE_CDN_HOSTS = ["cdn.jsdmirror.com"];
       let enhancedViewerPromise = null;
+
+      function resolveEngineCdn(raw) {
+        if (!raw) return FILE_VIEWER_CDN;
+        try {
+          const url = new URL(raw, window.location.origin);
+          if (url.protocol !== "https:") return FILE_VIEWER_CDN;
+          if (!ALLOWED_ENGINE_CDN_HOSTS.includes(url.hostname)) return FILE_VIEWER_CDN;
+          return url.href;
+        } catch {
+          return FILE_VIEWER_CDN;
+        }
+      }
 
       const params = new URLSearchParams(window.location.search);
       const state = {
@@ -1691,7 +1706,7 @@
             }
 
             const script = document.createElement("script");
-            script.src = params.get("engineCdn") || FILE_VIEWER_CDN;
+            script.src = resolveEngineCdn(params.get("engineCdn"));
             script.async = true;
             script.dataset.fileViewerEngine = "1";
             script.onload = resolve;

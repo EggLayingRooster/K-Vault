@@ -1296,7 +1296,7 @@ function createApp() {
     }
 
     const session = authService.createSession(username);
-    c.header('Set-Cookie', authService.createSessionCookie(session.token));
+    c.header('Set-Cookie', authService.createSessionCookie(session.token, c.req.raw));
 
     return c.json({ success: true, message: 'Login successful.' });
   });

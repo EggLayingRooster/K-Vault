@@ -586,17 +586,27 @@
       }
     })();
 
+    function resolveRedirectTarget(raw) {
+      const fallback = '/';
+      if (!raw) return fallback;
+      let url;
+      try {
+        url = new URL(raw, window.location.origin);
+      } catch {
+        return fallback;
+      }
+      // 只允许站内地址：拦掉 javascript:/data: 等协议和外部域名（开放重定向）
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return fallback;
+      if (url.origin !== window.location.origin) return fallback;
+      // 防止重定向到登录页本身，避免无限循环
+      if (url.pathname.endsWith('login.html') || url.pathname === '/login') return fallback;
+      return url.pathname + url.search + url.hash;
+    }
+
     function redirectToTarget() {
       const params = new URLSearchParams(window.location.search);
-      let redirect = params.get('redirect') || '/';
-      
-      // 防止重定向到登录页本身，避免无限循环
-      if (redirect.includes('login.html') || redirect === '/login') {
-        redirect = '/';
-      }
-      
       // 使用 replace 防止用户回退到登录页
-      window.location.replace(redirect);
+      window.location.replace(resolveRedirectTarget(params.get('redirect')));
     }
 
     function togglePassword() {

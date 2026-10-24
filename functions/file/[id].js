@@ -158,13 +158,19 @@ function addCorsHeaders(headers) {
 
 function addResponseHeaders(headers, fileName, mimeType, upstream = null) {
   addCorsHeaders(headers);
-  headers.set('Content-Type', mimeType || 'application/octet-stream');
+  const contentType = mimeType || 'application/octet-stream';
+  headers.set('Content-Type', contentType);
   headers.set('Cache-Control', 'no-store, max-age=0');
   headers.set('Accept-Ranges', 'bytes');
+  // 禁止浏览器猜测类型，避免把上传内容当 HTML 执行
+  headers.set('X-Content-Type-Options', 'nosniff');
 
   if (fileName) {
     const encoded = encodeURIComponent(fileName);
-    headers.set('Content-Disposition', `inline; filename="${encoded}"; filename*=UTF-8''${encoded}`);
+    // HTML/SVG/JS 等主动内容强制下载，否则上传的文件会在本站域名下执行脚本
+    const isActiveContent = /^(text\/html|application\/xhtml\+xml|image\/svg\+xml|text\/xml|application\/xml|text\/javascript|application\/javascript)/i.test(contentType);
+    const disposition = isActiveContent ? 'attachment' : 'inline';
+    headers.set('Content-Disposition', `${disposition}; filename="${encoded}"; filename*=UTF-8''${encoded}`);
   }
 
   if (upstream) {

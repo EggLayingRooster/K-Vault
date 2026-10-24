@@ -13,6 +13,9 @@ import {
   shouldUseSignedTelegramLinks,
   shouldWriteTelegramMetadata,
 } from "../utils/telegram.js";
+import { checkAuthentication, isAuthRequired } from "../utils/auth.js";
+import { checkGuestUpload } from "../utils/guest.js";
+import { validateRemoteUrl, validateRedirectLocation, MAX_REDIRECTS } from "../utils/ssrf-guard.js";
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const FETCH_TIMEOUT = 30000;
@@ -22,6 +25,22 @@ export async function onRequestPost(context) {
   const { request, env } = context;
 
   try {
+    // 鉴权：管理员，或已启用且未超限的访客
+    const isAdmin = isAuthRequired(env)
+      ? (await checkAuthentication(context)).authenticated
+      : true;
+
+    let maxBytes = MAX_FILE_SIZE;
+
+    if (!isAdmin) {
+      const guestCheck = await checkGuestUpload(request, env, 0);
+      if (!guestCheck.allowed) {
+        return jsonResponse({ error: guestCheck.reason || "未授权" }, guestCheck.status || 401);
+      }
+      const guestMax = parseInt(env.GUEST_MAX_FILE_SIZE, 10) || 5 * 1024 * 1024;
+      maxBytes = Math.min(MAX_FILE_SIZE, guestMax);
+    }
+
     const body = await request.json();
     const url = String(body?.url || "").trim();
     const storageMode = String(body?.storageMode || "telegram").toLowerCase();
@@ -31,19 +50,16 @@ export async function onRequestPost(context) {
       return jsonResponse({ error: "请输入 URL" }, 400);
     }
 
-    let parsedUrl;
-    try {
-      parsedUrl = new URL(url);
-      if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-        return jsonResponse({ error: "仅支持 HTTP/HTTPS URL" }, 400);
-      }
-    } catch {
-      return jsonResponse({ error: "URL 格式无效" }, 400);
+    // SSRF 校验：协议、主机名（含内网/元数据地址）、端口
+    const urlCheck = validateRemoteUrl(url);
+    if (!urlCheck.ok) {
+      return jsonResponse({ error: urlCheck.message, code: urlCheck.code }, 400);
     }
+    const parsedUrl = urlCheck.url;
 
-    const fetched = await fetchRemote(url);
+    const fetched = await fetchRemote(url, maxBytes);
     if (!fetched.ok) {
-      return jsonResponse({ error: fetched.error }, fetched.status || 502);
+      return jsonResponse({ error: fetched.error, code: fetched.code }, fetched.status || 502);
     }
 
     const arrayBuffer = fetched.arrayBuffer;
@@ -51,9 +67,9 @@ export async function onRequestPost(context) {
     if (!fileSize) {
       return jsonResponse({ error: "Remote file is empty" }, 400);
     }
-    if (fileSize > MAX_FILE_SIZE) {
+    if (fileSize > maxBytes) {
       return jsonResponse(
-        { error: `文件过大（${formatSize(fileSize)}），最大允许 ${formatSize(MAX_FILE_SIZE)}。` },
+        { error: `文件过大（${formatSize(fileSize)}），最大允许 ${formatSize(maxBytes)}。` },
         413
       );
     }
@@ -116,34 +132,79 @@ export async function onRequestPost(context) {
   }
 }
 
-async function fetchRemote(url) {
+async function fetchRemote(url, maxBytes = MAX_FILE_SIZE) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "Mozilla/5.0 K-Vault URL Uploader",
-        Accept: "image/*,video/*,audio/*,application/*,*/*",
-      },
-    });
+    let currentUrl = url;
 
-    if (!response.ok) {
+    // 手动跟随重定向，每一跳都重新做 SSRF 校验
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const hopCheck = validateRemoteUrl(currentUrl);
+      if (!hopCheck.ok) {
+        return { ok: false, status: 400, code: hopCheck.code, error: hopCheck.message };
+      }
+
+      const response = await fetch(hopCheck.url.href, {
+        signal: controller.signal,
+        redirect: "manual",
+        headers: {
+          "User-Agent": "Mozilla/5.0 K-Vault URL Uploader",
+          Accept: "image/*,video/*,audio/*,application/*,*/*",
+        },
+      });
+
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get("Location");
+        if (!location) {
+          return { ok: false, status: 502, error: "远程 URL 返回重定向，但缺少 Location 头。" };
+        }
+        const next = validateRedirectLocation(location, hopCheck.url.href);
+        if (!next.ok) {
+          return { ok: false, status: 400, code: next.code, error: next.message };
+        }
+        currentUrl = next.url.href;
+        continue;
+      }
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          status: 502,
+          error: `远程 URL 响应异常：${response.status} ${response.statusText}`,
+        };
+      }
+
+      // 先用 Content-Length 预检，避免把超大文件读进内存
+      const declaredLength = Number(response.headers.get("content-length") || 0);
+      if (declaredLength && declaredLength > maxBytes) {
+        return {
+          ok: false,
+          status: 413,
+          code: "FILE_TOO_LARGE",
+          error: `远程文件过大（${formatSize(declaredLength)}），最大允许 ${formatSize(maxBytes)}。`,
+        };
+      }
+
+      const contentType = response.headers.get("content-type") || "application/octet-stream";
+      const arrayBuffer = await readBodyWithLimit(response, maxBytes);
+      if (!arrayBuffer.ok) {
+        return { ok: false, status: arrayBuffer.status, code: arrayBuffer.code, error: arrayBuffer.error };
+      }
+
       return {
-        ok: false,
-        status: 502,
-        error: `远程 URL 响应异常：${response.status} ${response.statusText}`,
+        ok: true,
+        contentType,
+        arrayBuffer: arrayBuffer.data,
       };
     }
 
-    const contentType = response.headers.get("content-type") || "application/octet-stream";
-    const arrayBuffer = await response.arrayBuffer();
-
     return {
-      ok: true,
-      contentType,
-      arrayBuffer,
+      ok: false,
+      status: 400,
+      code: "TOO_MANY_REDIRECTS",
+      error: "远程 URL 重定向次数过多。",
     };
   } catch (error) {
     if (error.name === "AbortError") {
@@ -162,6 +223,55 @@ async function fetchRemote(url) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// 流式读取并累计大小，超限立刻中断，不会把整个超大响应读进内存
+async function readBodyWithLimit(response, maxBytes) {
+  if (!response.body) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxBytes) {
+      return {
+        ok: false,
+        status: 413,
+        code: "FILE_TOO_LARGE",
+        error: `远程文件过大，最大允许 ${formatSize(maxBytes)}。`,
+      };
+    }
+    return { ok: true, data: buffer };
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        try { await reader.cancel(); } catch {}
+        return {
+          ok: false,
+          status: 413,
+          code: "FILE_TOO_LARGE",
+          error: `远程文件过大，最大允许 ${formatSize(maxBytes)}。`,
+        };
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    return { ok: false, status: 502, error: `读取远程内容失败：${error.message}` };
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return { ok: true, data: merged.buffer };
 }
 
 function jsonResponse(data, status = 200) {
