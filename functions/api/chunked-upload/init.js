@@ -86,6 +86,13 @@ export async function onRequestPost(context) {
       }
     }
 
+    // 大文件没拿到原生分片时记录一条日志，便于在 Pages Functions 日志里定位
+    if (!r2Multipart && normalizedFileSize > 48 * 1024 * 1024) {
+      console.warn(
+        `[chunked-upload] 大文件未启用 R2 原生分片: storageMode=${normalizedStorage} hasR2Bucket=${Boolean(env.R2_BUCKET)} fileSize=${normalizedFileSize}`
+      );
+    }
+
     const uploadTask = {
       uploadId,
       fileName,

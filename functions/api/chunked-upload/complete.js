@@ -121,7 +121,13 @@ export async function onRequestPost(context) {
         },
       });
 
-      await cleanupUploadTask(uploadId, totalChunks, chunkBackend, env);
+      // 原生分片没有独立的 chunk 对象，只需清理任务键，
+      // 避免 20 次无意义的 R2 delete 子请求
+      try {
+        await env.img_url.delete(`upload:${uploadId}`);
+      } catch (cleanupError) {
+        console.warn('Cleanup multipart task failed:', cleanupError?.message || cleanupError);
+      }
 
       return jsonResponse({
         success: true,
@@ -129,6 +135,23 @@ export async function onRequestPost(context) {
         fileName: taskData.fileName,
         fileSize: taskData.fileSize,
       });
+    }
+
+    // 大文件若没走 R2 原生分片，继续走下面的缓冲拼接必然撑爆 128MB 内存，
+    // 平台会直接杀掉 Worker 并返回 503，前端只能看到一个无意义的错误页。
+    // 这里提前拦下并说明原因，把「神秘 503」变成可定位的错误。
+    const guardFileSize = Number(taskData.fileSize || 0);
+    if (!taskData.r2Multipart && guardFileSize > 48 * MB) {
+      return jsonResponse(
+        {
+          error:
+            `存储后端「${taskData.storageMode || 'telegram'}」未启用 R2 原生分片，` +
+            `${Math.round(guardFileSize / MB)}MB 的文件在合并阶段会超出 Worker 内存上限。` +
+            '请确认存储位置选择的是 R2，或改用更小的文件。',
+          code: 'CHUNK_MERGE_MEMORY_RISK',
+        },
+        409
+      );
     }
 
     const chunks = [];
