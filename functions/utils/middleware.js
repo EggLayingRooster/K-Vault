@@ -1,6 +1,17 @@
 import sentryPlugin from "@cloudflare/pages-plugin-sentry";
 import '@sentry/tracing';
 
+// 不允许上报到 Sentry 的请求头（值可能是会话 Cookie、API Token 或上游凭据）
+const SENSITIVE_HEADERS = new Set([
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'proxy-authorization',
+  'x-api-key',
+  'x-auth-token',
+  'cf-access-jwt-assertion',
+]);
+
 export async function errorHandling(context) {
   const env = context.env;
   if (typeof env.disable_telemetry == "undefined" || env.disable_telemetry == null || env.disable_telemetry == "") {
@@ -30,6 +41,11 @@ export function telemetryData(context) {
     try {
       const parsedHeaders = {};
       context.request.headers.forEach((value, key) => {
+        // 凭据类请求头不能进 Sentry（tag 会被索引，等于把会话和 Token 交给第三方）
+        if (SENSITIVE_HEADERS.has(key.toLowerCase())) {
+          parsedHeaders[key] = "[redacted]";
+          return;
+        }
         parsedHeaders[key] = value
         //check if the value is empty
         if (value.length > 0) {
@@ -48,10 +64,12 @@ export function telemetryData(context) {
           }
         }
       }
+      // 去掉 query string，避免 ?password= 之类的参数被上报
+      const safeUrl = new URL(context.request.url);
       const data = {
         headers: parsedHeaders,
         cf: parsedCF,
-        url: context.request.url,
+        url: `${safeUrl.origin}${safeUrl.pathname}`,
         method: context.request.method,
         redirect: context.request.redirect,
       }

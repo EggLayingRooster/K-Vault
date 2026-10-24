@@ -207,12 +207,11 @@ function getTelegramFileFromMessage(message) {
 // ---------------------------------------------------------------------------
 
 function getFileLinkSecrets(env) {
+  // 只使用显式配置的密钥。内置兜底常量等于把签名密钥公开写进源码。
   const candidates = [
     env?.FILE_URL_SECRET,
     env?.TG_FILE_URL_SECRET,
     env?.TG_Bot_Token,
-    'k-vault-default-secret',
-    'tgbed-default-secret',
   ];
   return [...new Set(candidates.map((v) => (v == null ? '' : String(v).trim())).filter(Boolean))];
 }
@@ -237,6 +236,11 @@ function createSignedTelegramFileId({ fileId, fileExtension, fileName, mimeType,
   };
   const payload = base64UrlEncode(JSON.stringify(payloadObj));
   const [primarySecret] = getFileLinkSecrets(env);
+  if (!primarySecret) {
+    throw new Error(
+      '签名链接模式需要配置 FILE_URL_SECRET（或 TG_FILE_URL_SECRET / TG_Bot_Token），否则签名可被伪造。'
+    );
+  }
   const signature = signPayload(payload, primarySecret);
   return `tgs_${payload}.${signature}.${ext}`;
 }

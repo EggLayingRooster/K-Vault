@@ -3618,8 +3618,18 @@ curl -X POST "{SITE_URL}/api/v1/import" \
             this.sortOption === 'sizeDesc' ? data.sort((a, b) => b.metadata.fileSize - a.metadata.fileSize) :
             data.sort((a, b) => b.metadata.TimeStamp - a.metadata.TimeStamp);
       },
+      // 用于拼接 HTML 字符串时转义不可信内容，避免存储型 XSS
+      escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      },
       formattedFileDetails(item) {
         const metadata = item.metadata;
+        const esc = (v) => this.escapeHtml(v);
         const timestamp = new Date(metadata.TimeStamp).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
         const storageType = this.getStorageType(item.name);
         const storageLabel = this.getStorageLabel(item.name);
@@ -3634,13 +3644,13 @@ curl -X POST "{SITE_URL}/api/v1/import" \
         const folderPath = this.normalizeFolderPath(metadata.folderPath || '');
         return `
           <div style="text-align: left; padding: 5px;">
-            <div><strong>ID：</strong>${item.name}</div>
-            <div><strong>文件名：</strong>${metadata.fileName || item.name}</div>
-            <div><strong>文件大小：</strong>${fileSize}</div>
-            <div><strong>存储位置：</strong><span style="color: ${storageColor}; font-weight: bold;">${storageLabel}</span></div>
-            <div><strong>所在目录：</strong>${folderPath || '根目录'}</div>
-            <div><strong>上传时间：</strong>${timestamp}</div>
-            <div><strong>状态：</strong>${metadata.ListType || 'None'}</div>
+            <div><strong>ID：</strong>${esc(item.name)}</div>
+            <div><strong>文件名：</strong>${esc(metadata.fileName || item.name)}</div>
+            <div><strong>文件大小：</strong>${esc(fileSize)}</div>
+            <div><strong>存储位置：</strong><span style="color: ${esc(storageColor)}; font-weight: bold;">${esc(storageLabel)}</span></div>
+            <div><strong>所在目录：</strong>${esc(folderPath) || '根目录'}</div>
+            <div><strong>上传时间：</strong>${esc(timestamp)}</div>
+            <div><strong>状态：</strong>${esc(metadata.ListType || 'None')}</div>
           </div>
         `;
       },
@@ -3736,7 +3746,7 @@ curl -X POST "{SITE_URL}/api/v1/import" \
             : 'Telegram 频道';
           const folderText = this.folderPath ? ` / ${this.folderPath}` : ' / 根目录';
           await this.$confirm(
-            `确定要上传这 ${valid.length} 个文件到 <b>${storageTarget}</b> 的目录 <b>${folderText}</b> 吗?`, 
+            `确定要上传这 ${valid.length} 个文件到 <b>${this.escapeHtml(storageTarget)}</b> 的目录 <b>${this.escapeHtml(folderText)}</b> 吗?`, 
             '上传确认', 
             {
               type: 'info',
@@ -4128,46 +4138,47 @@ curl -X POST "{SITE_URL}/api/v1/import" \
           loading.close();
           
           // 显示详细状态对话框
+          const esc = (v) => this.escapeHtml(v);
           const statusHtml = `
             <div style="line-height: 2;">
               <p><i class="fas fa-robot" style="width: 20px;"></i> <b>Telegram:</b> 
                 <span style="color: ${status.telegram.connected ? '#67c23a' : '#f56c6c'}">
-                  ${status.telegram.connected ? '✓' : '✗'} ${status.telegram.message}
+                  ${status.telegram.connected ? '✓' : '✗'} ${esc(status.telegram.message)}
                 </span>
               </p>
               <p><i class="fas fa-database" style="width: 20px;"></i> <b>KV 存储:</b> 
                 <span style="color: ${status.kv.connected ? '#67c23a' : '#f56c6c'}">
-                  ${status.kv.connected ? '✓' : '✗'} ${status.kv.message}
+                  ${status.kv.connected ? '✓' : '✗'} ${esc(status.kv.message)}
                 </span>
               </p>
               <p><i class="fas fa-cloud" style="width: 20px;"></i> <b>R2 存储:</b>
                 <span style="color: ${status.r2.connected ? '#67c23a' : (this.isUnconfiguredStatus(status.r2) ? '#909399' : '#f56c6c')}">
-                  ${status.r2.connected ? '✓' : (this.isUnconfiguredStatus(status.r2) ? '○' : '✗')} ${status.r2.message}
+                  ${status.r2.connected ? '✓' : (this.isUnconfiguredStatus(status.r2) ? '○' : '✗')} ${esc(status.r2.message)}
                 </span>
               </p>
               <p><i class="fas fa-database" style="width: 20px; color: #e6a23c;"></i> <b>S3 存储:</b>
                 <span style="color: ${status.s3?.connected ? '#67c23a' : (this.isUnconfiguredStatus(status.s3) ? '#909399' : '#f56c6c')}">
-                  ${status.s3?.connected ? '✓' : (this.isUnconfiguredStatus(status.s3) ? '○' : '✗')} ${status.s3?.message || '未知'}
+                  ${status.s3?.connected ? '✓' : (this.isUnconfiguredStatus(status.s3) ? '○' : '✗')} ${esc(status.s3?.message || '未知')}
                 </span>
               </p>
               <p><i class="fab fa-discord" style="width: 20px; color: #7289da;"></i> <b>Discord:</b>
                 <span style="color: ${status.discord?.connected ? '#67c23a' : (this.isUnconfiguredStatus(status.discord) ? '#909399' : '#f56c6c')}">
-                  ${status.discord?.connected ? '✓' : (this.isUnconfiguredStatus(status.discord) ? '○' : '✗')} ${status.discord?.message || '未知'}
+                  ${status.discord?.connected ? '✓' : (this.isUnconfiguredStatus(status.discord) ? '○' : '✗')} ${esc(status.discord?.message || '未知')}
                 </span>
               </p>
               <p><i class="fas fa-robot" style="width: 20px; color: #ff9d00;"></i> <b>HuggingFace:</b>
                 <span style="color: ${status.huggingface?.connected ? '#67c23a' : (this.isUnconfiguredStatus(status.huggingface) ? '#909399' : '#f56c6c')}">
-                  ${status.huggingface?.connected ? '✓' : (this.isUnconfiguredStatus(status.huggingface) ? '○' : '✗')} ${status.huggingface?.message || '未知'}
+                  ${status.huggingface?.connected ? '✓' : (this.isUnconfiguredStatus(status.huggingface) ? '○' : '✗')} ${esc(status.huggingface?.message || '未知')}
                 </span>
               </p>
               <p><i class="fab fa-github" style="width: 20px; color: #24292f;"></i> <b>GitHub:</b>
                 <span style="color: ${status.github?.connected ? '#67c23a' : (this.isUnconfiguredStatus(status.github) ? '#909399' : '#f56c6c')}">
-                  ${status.github?.connected ? '✓' : (this.isUnconfiguredStatus(status.github) ? '○' : '✗')} ${status.github?.message || '未知'}
+                  ${status.github?.connected ? '✓' : (this.isUnconfiguredStatus(status.github) ? '○' : '✗')} ${esc(status.github?.message || '未知')}
                 </span>
               </p>
               <p><i class="fas fa-lock" style="width: 20px;"></i> <b>身份验证:</b> 
                 <span style="color: ${status.auth.enabled ? '#67c23a' : '#909399'}">
-                  ${status.auth.enabled ? '✓' : '○'} ${status.auth.message}
+                  ${status.auth.enabled ? '✓' : '○'} ${esc(status.auth.message)}
                 </span>
               </p>
             </div>

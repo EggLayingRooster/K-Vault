@@ -7,6 +7,25 @@ function baseMime(mime) {
   return String(mime || '').split(';')[0].trim().toLowerCase();
 }
 
+/**
+ * 归一化目录路径：统一分隔符、折叠 . 和 ..、去掉首尾斜杠。
+ * 策略校验必须在归一化之后进行，否则 "allowed/../../etc" 会通过 startsWith('allowed')。
+ */
+function normalizePolicyFolder(value) {
+  const raw = String(value || '').replace(/\\/g, '/');
+  const parts = [];
+  for (const piece of raw.split('/')) {
+    const seg = piece.trim();
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      parts.pop();
+      continue;
+    }
+    parts.push(seg);
+  }
+  return parts.join('/');
+}
+
 export function checkUploadPolicy(tokenRecord, { storage, mime, sizeBytes, folderPath, request }) {
   const policies = tokenRecord?.policies;
   if (!policies) return { ok: true };
@@ -44,13 +63,16 @@ export function checkUploadPolicy(tokenRecord, { storage, mime, sizeBytes, folde
   }
 
   if (policies.folderPrefix) {
-    const folder = String(folderPath || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
-    if (!folder.startsWith(policies.folderPrefix)) {
+    const folder = normalizePolicyFolder(folderPath);
+    const prefix = normalizePolicyFolder(policies.folderPrefix);
+    // 必须按路径段匹配，否则前缀 "private" 会放行 "private2/"
+    const withinPrefix = folder === prefix || folder.startsWith(`${prefix}/`);
+    if (!withinPrefix) {
       return {
         ok: false,
         status: 403,
         code: 'POLICY_FOLDER_DENIED',
-        message: `API Token policy restricts uploads to folder prefix "${policies.folderPrefix}/".`,
+        message: `API Token policy restricts uploads to folder prefix "${prefix}/".`,
       };
     }
   }

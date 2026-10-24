@@ -332,13 +332,13 @@ export async function sendTelegramUploadNotice(
 }
 
 function getFileLinkSecrets(env) {
+  // 只使用显式配置的密钥。
+  // 早期版本在候选里内置了 "k-vault-default-secret" / "tgbed-default-secret" 作为兜底，
+  // 那等于把签名密钥公开写进源码——任何人构造 payload 后用公开常量签名即可通过校验。
   const candidates = [
     env?.FILE_URL_SECRET,
     env?.TG_FILE_URL_SECRET,
     env?.TG_Bot_Token,
-    "k-vault-default-secret",
-    // Legacy fallback keeps previously signed links valid.
-    "tgbed-default-secret",
   ];
 
   return [...new Set(candidates
@@ -370,6 +370,12 @@ export async function createSignedTelegramFileId(
   };
   const payload = base64UrlEncode(JSON.stringify(payloadObj));
   const [primarySecret] = getFileLinkSecrets(env);
+  if (!primarySecret) {
+    // 宁可让上传报错，也不要生成一个用公开常量签名、谁都能伪造的链接
+    throw new Error(
+      "签名链接模式需要配置 FILE_URL_SECRET（或 TG_FILE_URL_SECRET / TG_Bot_Token），否则签名可被伪造。"
+    );
+  }
   const signature = await signPayload(payload, primarySecret);
   return `tgs_${payload}.${signature}.${ext}`;
 }
