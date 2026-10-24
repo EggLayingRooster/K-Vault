@@ -89,6 +89,14 @@ export async function verifySession(sessionToken, env) {
  * 创建会话
  */
 export async function createSession(user, env) {
+  if (!env?.img_url) {
+    // 直接调 env.img_url.put() 会抛 "Cannot read properties of undefined (reading 'put')"，
+    // 这个报错看不出是绑定缺失，换成可操作的提示。
+    throw new Error(
+      '未绑定 KV 命名空间 img_url，无法创建会话。请检查 Cloudflare Pages 的 KV 绑定（Production 与 Preview 需分别配置）；本地调试请用 --kv=img_url 启动。'
+    );
+  }
+
   const token = generateSessionToken();
   const sessionData = {
     user,

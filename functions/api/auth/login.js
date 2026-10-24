@@ -23,6 +23,17 @@ export async function onRequestPost(context) {
       });
     }
 
+    // KV 绑定缺失时给出可操作的提示，而不是 "Cannot read properties of undefined (reading 'put')"
+    if (!env?.img_url) {
+      return new Response(JSON.stringify({
+        success: false,
+        message: '服务端未绑定 KV 命名空间（变量名必须是 img_url），无法创建会话。请到 Cloudflare Pages 项目设置检查 KV 绑定，注意 Production 和 Preview 两个环境要分别绑定；本地调试请用 --kv=img_url 启动。'
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
     const body = await request.json();
     const username = String(body?.username ?? body?.user ?? '').trim();
     const password = String(body?.password ?? body?.pass ?? '');
