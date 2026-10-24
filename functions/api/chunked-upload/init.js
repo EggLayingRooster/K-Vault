@@ -49,6 +49,35 @@ export async function onRequestPost(context) {
 
     const chunkBackend = resolveChunkBackend(env);
 
+    // R2 原生分片上传：分片直接写进 R2，complete 时由 R2 在服务端拼接，
+    // 不需要把整个文件读进内存。原来的做法峰值约为文件大小的 2 倍
+    // （98MB 文件约 197MB），超过 Workers 128MB 内存上限，表现为
+    // 进度到 100% 后 complete 返回非 JSON 错误页。
+    let r2Multipart = null;
+    if (
+      normalizedStorage === 'r2' &&
+      env.R2_BUCKET &&
+      env.MINIMIZE_KV_WRITES !== 'true' &&
+      CHUNK_SIZE >= 5 * 1024 * 1024
+    ) {
+      try {
+        const ext = getFileExtension(fileName);
+        const objectKey = `r2_${Date.now()}_${uploadId.slice(0, 8)}.${ext}`;
+        const multipart = await env.R2_BUCKET.createMultipartUpload(objectKey, {
+          httpMetadata: { contentType: fileType || 'application/octet-stream' },
+          customMetadata: { fileName, uploadTime: String(Date.now()) },
+        });
+        r2Multipart = {
+          key: objectKey,
+          uploadId: multipart.uploadId,
+          parts: [],
+        };
+      } catch (error) {
+        console.error('R2 multipart init failed, falling back to buffered chunks:', error);
+        r2Multipart = null;
+      }
+    }
+
     const uploadTask = {
       uploadId,
       fileName,
@@ -58,6 +87,7 @@ export async function onRequestPost(context) {
       storageMode: normalizedStorage,
       folderPath,
       chunkBackend,
+      r2Multipart,
       uploadedChunks: [],
       createdAt: Date.now(),
       status: 'pending',
@@ -183,4 +213,11 @@ function normalizeFolderPath(value) {
     output.push(piece);
   }
   return output.join('/');
+}
+
+function getFileExtension(fileName) {
+  const name = String(fileName || '');
+  const ext = name.split('.').pop()?.toLowerCase();
+  if (!ext || ext === name.toLowerCase()) return 'bin';
+  return ext.replace(/[^a-z0-9]/g, '') || 'bin';
 }

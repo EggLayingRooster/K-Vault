@@ -51,8 +51,16 @@ export async function onRequestPost(context) {
     }
 
     const chunkArrayBuffer = await chunk.arrayBuffer();
+    let multipartPart = null;
 
-    if (chunkBackend === 'r2') {
+    if (taskData.r2Multipart && env.R2_BUCKET) {
+      // R2 原生分片：直接交给 R2，Worker 侧不留副本
+      const multipart = env.R2_BUCKET.resumeMultipartUpload(
+        taskData.r2Multipart.key,
+        taskData.r2Multipart.uploadId,
+      );
+      multipartPart = await multipart.uploadPart(chunkIndex + 1, chunkArrayBuffer);
+    } else if (chunkBackend === 'r2') {
       if (!env.R2_BUCKET) {
         return jsonResponse({ error: 'R2 chunk backend requested but R2_BUCKET is not configured.' }, 500);
       }
@@ -82,6 +90,15 @@ export async function onRequestPost(context) {
       uploadedChunks = Array.from(new Set([...uploadedChunks, chunkIndex])).sort((a, b) => a - b);
       taskData.uploadedChunks = uploadedChunks;
       taskData.chunkBackend = chunkBackend;
+
+      if (multipartPart && taskData.r2Multipart) {
+        const parts = (taskData.r2Multipart.parts || []).filter(
+          (item) => item.partNumber !== multipartPart.partNumber,
+        );
+        parts.push({ partNumber: multipartPart.partNumber, etag: multipartPart.etag });
+        parts.sort((a, b) => a.partNumber - b.partNumber);
+        taskData.r2Multipart.parts = parts;
+      }
 
       await env.img_url.put(`upload:${uploadId}`, JSON.stringify(taskData), {
         expirationTtl: 3600,

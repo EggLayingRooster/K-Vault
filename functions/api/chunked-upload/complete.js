@@ -74,6 +74,63 @@ export async function onRequestPost(context) {
       }
     }
 
+    // R2 原生分片：由 R2 在服务端拼接，全程不把文件读进内存。
+    // 走这条路时不存在独立的 chunk 对象，也不需要 Blob 组装，
+    // 因此 100MB 级文件不会再因为超过 Workers 128MB 内存上限而失败。
+    if (taskData.storageMode === 'r2' && taskData.r2Multipart) {
+      if (!env.R2_BUCKET) {
+        return jsonResponse({ error: 'R2 未配置，无法完成上传' }, 500);
+      }
+
+      const parts = Array.isArray(taskData.r2Multipart.parts) ? taskData.r2Multipart.parts : [];
+      if (parts.length !== totalChunks) {
+        return jsonResponse(
+          {
+            error: '分片未完全上传',
+            uploaded: parts.length,
+            total: totalChunks,
+            missingChunks: getMissingChunks(parts.map((item) => item.partNumber - 1), totalChunks),
+          },
+          400
+        );
+      }
+
+      const multipart = env.R2_BUCKET.resumeMultipartUpload(
+        taskData.r2Multipart.key,
+        taskData.r2Multipart.uploadId
+      );
+      await multipart.complete(parts);
+
+      const objectKey = taskData.r2Multipart.key;
+      const multipartMetadataKey = `r2:${objectKey}`;
+      const multipartFolder = normalizeFolderPath(taskData.folderPath || '');
+
+      await env.img_url.put(multipartMetadataKey, '', {
+        metadata: {
+          TimeStamp: Date.now(),
+          ListType: 'None',
+          Label: 'None',
+          liked: false,
+          fileName: taskData.fileName,
+          fileSize: taskData.fileSize,
+          chunked: true,
+          totalChunks,
+          storageType: 'r2',
+          folderPath: multipartFolder || undefined,
+          r2Key: objectKey,
+        },
+      });
+
+      await cleanupUploadTask(uploadId, totalChunks, chunkBackend, env);
+
+      return jsonResponse({
+        success: true,
+        src: `/file/${multipartMetadataKey}`,
+        fileName: taskData.fileName,
+        fileSize: taskData.fileSize,
+      });
+    }
+
     const chunks = [];
     for (let i = 0; i < totalChunks; i++) {
       const chunkData = await readChunkData(uploadId, i, chunkBackend, env);

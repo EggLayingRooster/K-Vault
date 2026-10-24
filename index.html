@@ -4945,9 +4945,21 @@
               },
             );
 
-            const completeData = await completeResponse.json();
+            // 合并阶段出错时服务器可能返回 HTML 错误页，直接 .json() 会抛出
+            // "JSON.parse: unexpected character"，看不出真正原因
+            const completeText = await completeResponse.text();
+            let completeData = {};
+            try {
+              completeData = completeText ? JSON.parse(completeText) : {};
+            } catch {
+              throw new Error(
+                `合并分片失败（HTTP ${completeResponse.status}）：服务器返回了非 JSON 响应，通常是合并阶段内存超限或超时。`,
+              );
+            }
             if (!completeResponse.ok) {
-              throw new Error(completeData.error || "合并分片失败");
+              throw new Error(
+                completeData.error || `合并分片失败（HTTP ${completeResponse.status}）`,
+              );
             }
 
             item.uploadId = null;
