@@ -154,7 +154,7 @@ export class S3Client {
         if (options.metadata) {
             for (const [k, v] of Object.entries(options.metadata)) {
                 const hKey = k.startsWith('x-amz-meta-') ? k : `x-amz-meta-${k}`;
-                headers[hKey] = v;
+                headers[hKey] = toHeaderSafeValue(v);
             }
         }
 
@@ -260,6 +260,16 @@ export class S3Client {
 
         return response.ok;
     }
+}
+
+/**
+ * HTTP 头值只允许 ISO-8859-1 范围的字符，直接放中文文件名会抛 TypeError；
+ * 同时顺带挡掉换行符，避免头注入。
+ */
+function toHeaderSafeValue(value) {
+    const str = String(value == null ? '' : value);
+    if (/^[\x20-\x7E]*$/.test(str)) return str;
+    return encodeURIComponent(str);
 }
 
 /**

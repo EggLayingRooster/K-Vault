@@ -1,4 +1,5 @@
 import { createS3Client } from '../../utils/s3client.js';
+import { randomToken } from '../../utils/random-id.js';
 import { uploadToDiscord } from '../../utils/discord.js';
 import { hasHuggingFaceConfig, uploadToHuggingFace } from '../../utils/huggingface.js';
 import { hasWebDAVConfig, normalizeWebDAVPath, uploadToWebDAV } from '../../utils/webdav.js';
@@ -70,7 +71,7 @@ function getExtensionFromMime(mime) {
 }
 
 function randomId(prefix) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  return `${prefix}_${Date.now()}_${randomToken(4)}`;
 }
 
 async function sha256HexBuffer(buffer) {

@@ -1,5 +1,6 @@
 import { errorHandling, telemetryData } from "./utils/middleware.js";
 import { checkAuthentication, isAuthRequired } from "./utils/auth.js";
+import { randomToken } from "./utils/random-id.js";
 import { checkGuestUpload, incrementGuestCount } from "./utils/guest.js";
 import { createS3Client } from "./utils/s3client.js";
 import { uploadToDiscord } from "./utils/discord.js";
@@ -222,7 +223,7 @@ function joinStoragePath(folderPath, fileName) {
 }
 
 function randomId(prefix) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  return `${prefix}_${Date.now()}_${randomToken(4)}`;
 }
 
 function appendCommonMetadata(metadata, folderPath) {

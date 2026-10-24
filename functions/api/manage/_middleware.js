@@ -7,7 +7,15 @@ async function errorHandling(context) {
     try {
       return await context.next();
     } catch (err) {
-      return new Response(`${err.message}\n${err.stack}`, { status: 500 });
+      // 只写日志，不把堆栈返回给客户端（会暴露文件路径与内部结构）
+      console.error('manage api error:', err);
+      return new Response('Internal Server Error', {
+        status: 500,
+        headers: {
+          'Content-Type': 'text/plain;charset=UTF-8',
+          'Cache-Control': 'no-store',
+        },
+      });
     }
   }
 

@@ -3,6 +3,7 @@
  * POST /api/chunked-upload/complete
  */
 import { checkAuthentication, isAuthRequired } from '../../utils/auth.js';
+import { randomToken } from '../../utils/random-id.js';
 import { createS3Client } from '../../utils/s3client.js';
 import { uploadToDiscord } from '../../utils/discord.js';
 import { hasHuggingFaceConfig, uploadToHuggingFace } from '../../utils/huggingface.js';
@@ -105,7 +106,7 @@ export async function onRequestPost(context) {
         return jsonResponse({ error: 'S3 未配置，无法完成上传' }, 500);
       }
       const s3 = createS3Client(env);
-      const s3Id = `s3_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const s3Id = `s3_${Date.now()}_${randomToken(4)}`;
       const s3Key = `${s3Id}.${fileExtension}`;
       const arrayBuffer = await file.arrayBuffer();
       await s3.putObject(s3Key, arrayBuffer, {
@@ -124,7 +125,7 @@ export async function onRequestPost(context) {
       if (!discordResult.success) {
         return jsonResponse({ error: 'Discord 上传失败: ' + discordResult.error }, 500);
       }
-      const discordId = `discord_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const discordId = `discord_${Date.now()}_${randomToken(4)}`;
       responseFileKey = `discord:${discordId}.${fileExtension}`;
       metadataKey = responseFileKey;
       extraMetadata.discordChannelId = discordResult.channelId;
@@ -137,7 +138,7 @@ export async function onRequestPost(context) {
         return jsonResponse({ error: 'HuggingFace 未配置，无法完成上传' }, 500);
       }
       const arrayBuffer = await file.arrayBuffer();
-      const hfId = `hf_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const hfId = `hf_${Date.now()}_${randomToken(4)}`;
       const hfPath = joinStoragePath(folderPath, `${hfId}.${fileExtension}`);
       const hfResult = await uploadToHuggingFace(arrayBuffer, hfPath, taskData.fileName, env);
       if (!hfResult.success) {
@@ -151,7 +152,7 @@ export async function onRequestPost(context) {
         return jsonResponse({ error: 'WebDAV 未配置，无法完成上传' }, 500);
       }
       const arrayBuffer = await file.arrayBuffer();
-      const wdId = `wd_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const wdId = `wd_${Date.now()}_${randomToken(4)}`;
       const publicId = `${wdId}.${fileExtension}`;
       const webdavPath = joinStoragePath(folderPath, publicId);
       const webdavResult = await uploadToWebDAV(
@@ -169,7 +170,7 @@ export async function onRequestPost(context) {
         return jsonResponse({ error: 'GitHub 未配置，无法完成上传' }, 500);
       }
       const arrayBuffer = await file.arrayBuffer();
-      const ghId = `github_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const ghId = `github_${Date.now()}_${randomToken(4)}`;
       const publicId = `${ghId}.${fileExtension}`;
       const githubStorageKey = joinStoragePath(folderPath, publicId);
       const githubResult = await uploadToGitHub(
@@ -410,7 +411,7 @@ async function uploadToTelegram(file, env) {
 }
 
 async function uploadToR2(file, fileExtension, env) {
-  const fileId = `r2_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const fileId = `r2_${Date.now()}_${randomToken(4)}`;
   const objectKey = `${fileId}.${fileExtension}`;
   const arrayBuffer = await file.arrayBuffer();
 

@@ -297,12 +297,25 @@ function shouldCountAsDownload(method, response) {
 
 async function incrementShareDownloadCount(env, kvKey, metadata = {}) {
   if (!env?.img_url || !kvKey || !metadata) return;
-  const nextCount = Number(metadata.shareDownloadCount || 0) + 1;
-  const nextMetadata = {
-    ...metadata,
-    shareDownloadCount: nextCount,
-  };
-  await env.img_url.put(kvKey, '', { metadata: nextMetadata });
+
+  // metadata 是请求开始时的快照。直接写回去会把这段时间内并发的
+  // 封禁/白名单/改名等改动覆盖掉（表现为"屏蔽了又自动恢复"）。
+  // 重新读一次最新值，只更新计数，把竞态窗口从整个请求缩到两次 KV 操作之间。
+  let latest = metadata;
+  try {
+    const fresh = await env.img_url.getWithMetadata(kvKey);
+    if (fresh?.metadata) latest = fresh.metadata;
+  } catch {
+    // 读不到就用旧快照，保持原有行为
+  }
+
+  const nextCount = Number(latest.shareDownloadCount || 0) + 1;
+  await env.img_url.put(kvKey, '', {
+    metadata: {
+      ...latest,
+      shareDownloadCount: nextCount,
+    },
+  });
 }
 
 async function handleTelegramFile(context, fileId, record = null) {

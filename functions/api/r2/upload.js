@@ -6,6 +6,7 @@
 import { createStorageManager, generateKey, getFileType } from '../../utils/storage.js';
 import { checkAuthentication, isAuthRequired } from '../../utils/auth.js';
 import { checkGuestUpload } from '../../utils/guest.js';
+import { randomToken } from '../../utils/random-id.js';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 
@@ -62,7 +63,7 @@ export async function onRequestPost(context) {
     
     // 生成文件 ID
     const timestamp = Date.now();
-    const randomStr = Math.random().toString(36).substring(2, 10);
+    const randomStr = randomToken(4);
     const ext = file.name.split('.').pop() || '';
     const fileId = `${timestamp}_${randomStr}${ext ? '.' + ext : ''}`;
     

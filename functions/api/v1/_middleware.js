@@ -17,11 +17,11 @@ function resolveRequiredScope(request) {
   const method = String(request.method || 'GET').toUpperCase();
 
   const base = '/api/v1';
-  if (!pathname.startsWith(base)) return '';
+  if (!pathname.startsWith(base)) return '@deny';
   const subPath = pathname.slice(base.length) || '/';
 
-  // Public, no bearer required:
-  if (method === 'GET' && subPath === '/capabilities') return '';
+  // 公开端点，无需 bearer
+  if (method === 'GET' && subPath === '/capabilities') return '@public';
 
   // Introspection: any valid token, no specific scope ("@me" sentinel).
   if (method === 'GET' && subPath === '/me') return '@me';
@@ -38,7 +38,8 @@ function resolveRequiredScope(request) {
   if (method === 'GET' && /^\/paste\/[^/]+$/.test(subPath)) return 'read';
   if (method === 'DELETE' && /^\/paste\/[^/]+$/.test(subPath)) return 'delete';
 
-  return '';
+  // 未匹配的路径默认拒绝。原来返回 ''（= 公开），新增端点时忘记登记就会静默裸奔。
+  return '@deny';
 }
 
 function clientTag(request) {
@@ -65,10 +66,16 @@ export async function onRequest(context) {
 
   const requiredScope = resolveRequiredScope(request);
 
-  if (requiredScope === '') {
+  if (requiredScope === '@public') {
     const response = await context.next();
     applyCorsToResponse(response, corsHeaders);
     return response;
+  }
+
+  if (requiredScope === '@deny') {
+    const denied = apiError('ENDPOINT_NOT_ALLOWED', 'Endpoint not found.', 404);
+    applyCorsToResponse(denied, corsHeaders);
+    return denied;
   }
 
   const tokenValue = parseBearerToken(request);

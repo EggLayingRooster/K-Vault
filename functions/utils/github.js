@@ -232,32 +232,72 @@ async function deleteReleaseAssetById(config, assetId) {
   throw new Error(`GitHub release asset delete failed (${response.status}): ${detail}`);
 }
 
+async function renameReleaseAsset(config, assetId, name) {
+  const response = await fetch(repoApi(config, `/releases/assets/${assetId}`), {
+    method: 'PATCH',
+    headers: authHeaders(config, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    const detail = await parseErrorBody(response);
+    throw new Error(`GitHub release asset rename failed (${response.status}): ${detail}`);
+  }
+  return response.json().catch(() => ({}));
+}
+
 async function uploadViaReleases(config, { arrayBuffer, storageKey, fileName, contentType }) {
   const release = await ensureRelease(config);
   const assetName = releaseAssetName(config, storageKey, fileName);
 
+  // 不能先删再传：上传一旦失败旧对象就永久丢失。
+  // 先把旧资产改名腾出位置，上传成功后再删除；失败则改回原名。
   const existing = await findReleaseAsset(config, release.id, assetName);
   if (existing?.id) {
-    await deleteReleaseAssetById(config, existing.id);
+    await renameReleaseAsset(config, existing.id, `${assetName}.stale.${Date.now()}`);
   }
+
+  const restoreExisting = async () => {
+    if (!existing?.id) return;
+    try {
+      await renameReleaseAsset(config, existing.id, assetName);
+    } catch {
+      // 尽力而为，恢复失败也不会让情况更糟
+    }
+  };
 
   const uploadUrl = new URL(String(release.upload_url || '').replace(/\{.+\}$/, ''));
   uploadUrl.searchParams.set('name', assetName);
 
-  const response = await fetch(uploadUrl.toString(), {
-    method: 'POST',
-    headers: {
-      ...authHeaders(config, {
-        'Content-Type': contentType || 'application/octet-stream',
-        'Content-Length': String(arrayBuffer.byteLength),
-      }),
-    },
-    body: arrayBuffer,
-  });
+  let response;
+  try {
+    response = await fetch(uploadUrl.toString(), {
+      method: 'POST',
+      headers: {
+        ...authHeaders(config, {
+          'Content-Type': contentType || 'application/octet-stream',
+          'Content-Length': String(arrayBuffer.byteLength),
+        }),
+      },
+      body: arrayBuffer,
+    });
+  } catch (error) {
+    await restoreExisting();
+    throw error;
+  }
 
   const json = await response.json().catch(() => ({}));
   if (!response.ok) {
+    await restoreExisting();
     throw new Error(`GitHub release upload failed (${response.status}): ${json.message || 'Unknown error'}`);
+  }
+
+  // 新对象已就位，再清理旧资产；删失败也只是留个孤儿，不会丢数据
+  if (existing?.id) {
+    try {
+      await deleteReleaseAssetById(config, existing.id);
+    } catch {
+      // ignore
+    }
   }
 
   return {

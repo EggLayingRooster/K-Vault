@@ -1401,7 +1401,10 @@
 
       function toAbsoluteUrl(value) {
         try {
-          return new URL(value, window.location.origin).href;
+          const url = new URL(value, window.location.origin);
+          // 只放行 http/https，拦掉 javascript: / data: 这类可执行协议
+          if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+          return url.href;
         } catch {
           return "";
         }

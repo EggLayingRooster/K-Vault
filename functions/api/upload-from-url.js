@@ -16,6 +16,7 @@ import {
 import { checkAuthentication, isAuthRequired } from "../utils/auth.js";
 import { checkGuestUpload } from "../utils/guest.js";
 import { validateRemoteUrl, validateRedirectLocation, MAX_REDIRECTS } from "../utils/ssrf-guard.js";
+import { randomToken } from "../utils/random-id.js";
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const FETCH_TIMEOUT = 30000;
@@ -388,7 +389,7 @@ function buildFileName(parsedUrl, contentType) {
 }
 
 function randomId(prefix) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  return `${prefix}_${Date.now()}_${randomToken(4)}`;
 }
 
 function appendCommonMetadata(metadata, folderPath) {
