@@ -4725,11 +4725,24 @@
             formData.append("storageMode", this.getItemStorageMode(item));
             formData.append("folderPath", this.getItemFolderPath(item));
 
-            const response = await fetch(`${this.baseURL}/upload`, {
-              method: "POST",
-              body: formData,
-              credentials: "include",
-            });
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 180000);
+            let response;
+            try {
+              response = await fetch(`${this.baseURL}/upload`, {
+                method: "POST",
+                body: formData,
+                credentials: "include",
+                signal: controller.signal,
+              });
+            } catch (e) {
+              if (e.name === "AbortError") {
+                throw new Error("上传超时（180 秒），请重试");
+              }
+              throw e;
+            } finally {
+              clearTimeout(timer);
+            }
 
             const data = await response.json();
 
@@ -4749,66 +4762,102 @@
           },
 
           // 分片上传（大文件 >=20MB）
+          // 增强版：单片超时 + 自动重试 + 断点续传 + 真实字节进度
           async chunkedUpload(item) {
             const file = item.file;
-            const chunkSize = this.uploadConfig.chunkSize;
+            const chunkSize = this.uploadConfig.chunkSize || 5 * 1024 * 1024;
             const totalChunks = Math.ceil(file.size / chunkSize);
+            const CHUNK_TIMEOUT = 120000; // 单片超时 120 秒
+            const MAX_RETRY = 3;          // 单片最多重试 3 次
 
-            // 1. 初始化上传
-            const initResponse = await fetch(
-              `${this.baseURL}/api/chunked-upload/init`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  fileName: file.name,
-                  fileSize: file.size,
-                  fileType: file.type,
-                  totalChunks: totalChunks,
-                  storageMode: this.getItemStorageMode(item),
-                  folderPath: this.getItemFolderPath(item),
-                }),
-                credentials: "include",
-              },
-            );
+            let uploadId = item.uploadId || null;
+            const done = new Set();
 
-            const initData = await initResponse.json();
-            if (!initResponse.ok) {
-              throw new Error(initData.error || "初始化上传失败");
+            // 1. 尝试复用已有任务（断点续传）
+            if (uploadId) {
+              try {
+                const q = await fetch(
+                  `${this.baseURL}/api/chunked-upload/init?uploadId=${encodeURIComponent(uploadId)}`,
+                  { credentials: "include" },
+                );
+                if (q.ok) {
+                  const qd = await q.json();
+                  (qd.uploadedChunks || []).forEach((idx) => done.add(idx));
+                } else {
+                  uploadId = null;
+                }
+              } catch (e) {
+                uploadId = null;
+              }
             }
 
-            const uploadId = initData.uploadId;
-
-            // 2. 上传分片
-            for (let i = 0; i < totalChunks; i++) {
-              const start = i * chunkSize;
-              const end = Math.min(start + chunkSize, file.size);
-              const chunk = file.slice(start, end);
-
-              const formData = new FormData();
-              formData.append("chunk", chunk);
-              formData.append("uploadId", uploadId);
-              formData.append("chunkIndex", i);
-
-              const chunkResponse = await fetch(
-                `${this.baseURL}/api/chunked-upload/chunk`,
+            // 2. 没有可复用任务则初始化
+            if (!uploadId) {
+              const initResponse = await fetch(
+                `${this.baseURL}/api/chunked-upload/init`,
                 {
                   method: "POST",
-                  body: formData,
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    fileName: file.name,
+                    fileSize: file.size,
+                    fileType: file.type,
+                    totalChunks: totalChunks,
+                    storageMode: this.getItemStorageMode(item),
+                    folderPath: this.getItemFolderPath(item),
+                  }),
                   credentials: "include",
                 },
               );
 
-              if (!chunkResponse.ok) {
-                const errData = await chunkResponse.json();
-                throw new Error(errData.error || `分片 ${i + 1} 上传失败`);
+              const initData = await initResponse.json();
+              if (!initResponse.ok) {
+                throw new Error(initData.error || "初始化上传失败");
               }
-
-              // 更新进度
-              item.progress = Math.round(((i + 1) / totalChunks) * 90); // 留 10% 给合并
+              uploadId = initData.uploadId;
+              item.uploadId = uploadId;
             }
 
-            // 3. 完成上传
+            // 3. 逐片上传，跳过已完成的片
+            for (let i = 0; i < totalChunks; i++) {
+              if (done.has(i)) {
+                item.progress = Math.round(((i + 1) / totalChunks) * 90);
+                continue;
+              }
+
+              const start = i * chunkSize;
+              const end = Math.min(start + chunkSize, file.size);
+              const chunk = file.slice(start, end);
+              const span = 90 / totalChunks;
+              const base = i * span;
+
+              let lastErr = null;
+              for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+                try {
+                  await this.putChunk(uploadId, i, chunk, CHUNK_TIMEOUT, (loaded) => {
+                    item.progress = Math.min(90, Math.round(base + span * (loaded / chunk.size)));
+                  });
+                  lastErr = null;
+                  break;
+                } catch (err) {
+                  lastErr = err;
+                  console.warn(`分片 ${i + 1} 第 ${attempt + 1} 次失败:`, err.message);
+                  if (attempt < MAX_RETRY) {
+                    const wait = Math.pow(2, attempt) * 1000;
+                    await new Promise((res) => setTimeout(res, wait));
+                  }
+                }
+              }
+
+              if (lastErr) {
+                throw new Error(
+                  `分片 ${i + 1}/${totalChunks} 重试 ${MAX_RETRY} 次仍失败：${lastErr.message}。点击重试可从未完成处继续。`,
+                );
+              }
+              item.progress = Math.round(((i + 1) / totalChunks) * 90);
+            }
+
+            // 4. 完成上传
             const completeResponse = await fetch(
               `${this.baseURL}/api/chunked-upload/complete`,
               {
@@ -4824,9 +4873,46 @@
               throw new Error(completeData.error || "合并分片失败");
             }
 
+            item.uploadId = null;
             item.status = "success";
             item.progress = 100;
             this.handleUploadSuccess(item, completeData.src);
+          },
+
+          // 单片上传：XHR 实现真实字节进度 + 硬超时
+          putChunk(uploadId, index, chunk, timeoutMs, onProgress) {
+            return new Promise((resolve, reject) => {
+              const formData = new FormData();
+              formData.append("chunk", chunk);
+              formData.append("uploadId", uploadId);
+              formData.append("chunkIndex", index);
+
+              const xhr = new XMLHttpRequest();
+              xhr.open("POST", `${this.baseURL}/api/chunked-upload/chunk`, true);
+              xhr.withCredentials = true;
+              xhr.timeout = timeoutMs;
+
+              xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable && onProgress) onProgress(e.loaded);
+              };
+              xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  resolve(xhr.responseText);
+                  return;
+                }
+                let msg = `HTTP ${xhr.status}`;
+                try {
+                  const body = JSON.parse(xhr.responseText);
+                  if (body && body.error) msg = body.error;
+                } catch (e) {}
+                reject(new Error(msg));
+              };
+              xhr.onerror = () => reject(new Error("网络错误"));
+              xhr.ontimeout = () => reject(new Error(`超时 ${Math.round(timeoutMs / 1000)} 秒`));
+              xhr.onabort = () => reject(new Error("已取消"));
+
+              xhr.send(formData);
+            });
           },
 
           // 处理上传成功
